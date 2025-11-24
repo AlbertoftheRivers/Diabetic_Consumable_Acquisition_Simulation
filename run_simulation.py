@@ -4,19 +4,19 @@ Run this file to execute the diabetic patient consumable acquisition simulation.
 """
 
 from model.model import ConsumableAcquisitionModel
-from model.patient import create_patient_personas
+from model.patient import create_patient_population
 
 if __name__ == "__main__":
     # Set seed for reproducibility (use None for varying results each run)
     # Change 42 to any number, or set to None for random results
     SEED = None  # Set to a number (e.g., 42) for reproducible results
     
-    # Create patient personas
-    patients_with_stock = create_patient_personas(seed=SEED)
+    # Create patient population following the requested percentages and arrival flow
+    patients = create_patient_population(seed=SEED)
     
     # Initialize and run simulation
     model = ConsumableAcquisitionModel(seed=SEED)
-    model.run_simulation(patients_with_stock)
+    model.run_simulation(patients)
     
     # Export results
     model.export_to_csv()
@@ -25,12 +25,9 @@ if __name__ == "__main__":
     model.plot_results()
     
     # Print summary
-    print("\n=== Simulation Summary ===")
-    for result in model.results:
-        print(f"\n{result['patient_name']} (ID: {result['patient_id']}):")
-        print(f"  Wants: {'Insulin' if result['wants_insulin'] else ''} {'Pump' if result['wants_pump'] else ''}".strip())
-        print(f"  Pharmacy time: {result['pharmacy_total_time_days']:.2f} days ({result['pharmacy_total_time_minutes']:.1f} minutes)")
-        print(f"  1177 Platform time: {result['1177_total_time_days']:.2f} days ({result['1177_total_time_minutes']:.1f} minutes)")
-        print(f"  Total time: {result['total_time_days']:.2f} days ({result['total_time_minutes']:.1f} minutes)")
-        print(f"  Items received from pharmacy: {result['pharmacy_items_received']}")
+    print("\n=== Simulation KPIs ===")
+    print(f"Average total time (days): {model.kpis.get('avg_total_minutes', 0) / (24 * 60):.2f}")
+    print(f"Average pharmacy time (days): {model.kpis.get('avg_pharmacy_minutes', 0) / (24 * 60):.2f}")
+    print(f"Average 1177 time (days): {model.kpis.get('avg_1177_minutes', 0) / (24 * 60):.2f}")
+    print(f"Return rate: {model.kpis.get('return_rate', 0) * 100:.1f}%")
 

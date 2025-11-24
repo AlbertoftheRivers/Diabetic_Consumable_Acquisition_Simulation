@@ -42,20 +42,27 @@ python model/model.py
 ```
 
 This will:
-- Simulate 6 patient personas with different scenarios
+- Generate a 100-patient population following the requested demand mix
 - Generate a CSV file with timestamp in the `result/` folder
 - Create visualization plots showing the time taken for each patient
+  plus the aggregated KPIs requested for decision making.
 
-## Patient Scenarios
+## Patient population & arrivals
 
-The simulation includes 6 patient personas:
-
-1. **Anna**: Wants just insulin, in stock
-2. **Björn**: Wants just insulin, not in stock
-3. **Cecilia**: Wants just pump, in stock
-4. **David**: Wants just pump, not in stock
-5. **Eva**: Wants both insulin and pump, both in stock
-6. **Fredrik**: Wants both insulin and pump, not in stock
+- 100 patients are created per run.
+- 50% request only insulin, 30% request only pumps, and the remaining 20% request both.
+- **Arrival Schedule:** The simulation now runs a cyclical weekly schedule until all 100 patients are served.
+  - Monday: 7 patients
+  - Tuesday: 6 patients
+  - Wednesday: 5 patients
+  - Thursday: 4 patients
+  - Friday: 3 patients
+  - Saturday: 2 patients
+  - Sunday: 1 patient
+  - (Repeats the next Monday if needed)
+- Working hours are constrained to 07:00–22:00. Patients are distributed evenly within these hours.
+- Each patient orders the 1177 consumables before leaving for the pharmacy, meaning the online and physical processes can overlap.
+- The per-patient result now includes a `return_pharmacy` boolean flag indicating whether a second visit was required due to stock-outs.
 
 ## Consumables
 
@@ -72,17 +79,28 @@ Patients need 5 consumables:
 
 ## Model Logic
 
-### Pharmacy Process:
-1. Patient travels to pharmacy (10-30 mins random)
-2. Queue waiting time (~5 mins)
-3. Pharmacy checks stock
-4. If in stock: Handover delay (~5 mins)
-5. If not in stock: Order wait (1-3 days random), then return travel and handover
+### Pharmacy Process
 
-### 1177 Platform Process:
-1. Online ordering time (5-20 mins random)
-2. Delivery wait (2-7 days random)
-3. Travel to pickup point (10-30 mins random)
+- The pharmacy starts each run with 100 units of insulin and 30 pumps.
+- Patients requesting insulin consume 10 units per visit. Pump patients take 5 units.
+- If an item's inventory drops to 20% of its maximum (20 insulin units or 6 pumps) a replenishment order is created automatically.
+- Restocking takes 12–24 hours. Patients arriving before the truck comes may have to leave empty handed and are tagged with `return_pharmacy=True`. They must travel, queue and be served again after replenishment lands.
+- All pharmacy timings (travel, queue, service, return trip) are sampled independently for every patient, and the total pharmacy time already counts eventual waiting for stock.
+
+### 1177 Platform Process
+
+- Patients submit the 1177 order before going to the pharmacy.
+- Ordering takes 5–20 minutes, delivery waits 2–7 days, and pickup travel is 10–30 minutes.
+- Because the platform order is launched first, the overall time to obtain all five consumables is the **max** of the 1177 timeline and the pharmacy timeline (they proceed in parallel).
+
+## KPIs
+
+Every run calculates the KPIs you requested:
+
+1. `total_time_minutes` / `total_time_days` — Total time to get all five consumables.
+2. `pharmacy_total_time_minutes` / `pharmacy_total_time_days` — Pharmacy-only timeline, including restock waits and return visits.
+3. `1177_total_time_minutes` / `1177_total_time_days` — Time to get the online consumables.
+4. `return_pharmacy` — Boolean per patient; aggregate return rate is shown in the console, CSV, and plots.
 
 ## Output
 
@@ -91,4 +109,12 @@ Results are saved as CSV files in the `result/` folder with format:
 
 Plots are saved as PNG files:
 - `simulation_plot_YYYYMMDD_HHMMSS.png`
+
+The plot dashboard now visualizes:
+1. **Return Status by Need Category:** A categorical scatter plot showing which patient types (Insulin/Pump/Both) were forced to return.
+2. **Total Acquisition Time:** Scatter plot of total time per patient, with red markers for those who hit stock-outs.
+3. **Pharmacy Time:** Scatter plot showing the specific impact of stock-outs on pharmacy visit duration.
+4. **1177 Platform Time:** Scatter plot of online order fulfillment times (unaffected by pharmacy stock).
+
+The console summary (and `run_simulation.py`) now also prints the average total time, pharmacy time, 1177 time, and the percentage of patients who needed to return to the pharmacy.
 
