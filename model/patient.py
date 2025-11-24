@@ -33,15 +33,20 @@ class Patient:
         return needs
 
 
-def create_patient_personas() -> List[Tuple[Patient, dict]]:
+def create_patient_personas(seed: int = None) -> List[Tuple[Patient, dict]]:
     """
     Creates 6 patient personas with different scenarios.
+    
+    Args:
+        seed: Optional random seed for reproducibility. If None, uses system time.
     
     Returns:
         List of tuples: (Patient object, pharmacy_stock dict)
         pharmacy_stock format: {"insulin": bool, "pump": bool}
     """
-    random.seed(42)  # For reproducibility
+    if seed is not None:
+        random.seed(seed)  # For reproducibility when seed is provided
+    # Otherwise, use system time (default behavior) for varying results
     
     personas = []
     

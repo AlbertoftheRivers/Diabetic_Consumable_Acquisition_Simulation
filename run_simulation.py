@@ -7,11 +7,15 @@ from model.model import ConsumableAcquisitionModel
 from model.patient import create_patient_personas
 
 if __name__ == "__main__":
+    # Set seed for reproducibility (use None for varying results each run)
+    # Change 42 to any number, or set to None for random results
+    SEED = None  # Set to a number (e.g., 42) for reproducible results
+    
     # Create patient personas
-    patients_with_stock = create_patient_personas()
+    patients_with_stock = create_patient_personas(seed=SEED)
     
     # Initialize and run simulation
-    model = ConsumableAcquisitionModel()
+    model = ConsumableAcquisitionModel(seed=SEED)
     model.run_simulation(patients_with_stock)
     
     # Export results

@@ -16,9 +16,17 @@ from .patient import Patient
 class ConsumableAcquisitionModel:
     """Simulates the process of acquiring diabetic consumables."""
     
-    def __init__(self):
-        """Initialize the simulation model."""
+    def __init__(self, seed: int = None):
+        """
+        Initialize the simulation model.
+        
+        Args:
+            seed: Optional random seed for reproducibility. If None, uses system time.
+        """
         self.results = []
+        if seed is not None:
+            random.seed(seed)
+        # Otherwise, use system time (default behavior) for varying results
     
     def simulate_pharmacy_visit(
         self, 
@@ -328,11 +336,15 @@ def main():
     """Main function to run the simulation."""
     from .patient import create_patient_personas
     
+    # Set seed for reproducibility (use None for varying results each run)
+    # Change 42 to any number, or set to None for random results
+    SEED = None  # Set to a number (e.g., 42) for reproducible results
+    
     # Create patient personas
-    patients_with_stock = create_patient_personas()
+    patients_with_stock = create_patient_personas(seed=SEED)
     
     # Initialize and run simulation
-    model = ConsumableAcquisitionModel()
+    model = ConsumableAcquisitionModel(seed=SEED)
     model.run_simulation(patients_with_stock)
     
     # Export results
