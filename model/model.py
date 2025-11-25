@@ -39,6 +39,16 @@ class ConsumableAcquisitionModel:
         self.stock = dict(self.max_stock)
         self.restock_eta = {item: None for item in self.max_stock}
         self.backlog_units: Dict[str, List[float]] = {item: [] for item in self.max_stock}
+        self.stock_history: List[Dict] = []  # Track stock over time: {"time": t, "insulin": v, "pump": v}
+        self._log_stock(0)
+    
+    def _log_stock(self, current_time: float):
+        """Record current stock levels."""
+        self.stock_history.append({
+            "time": current_time,
+            "insulin": self.stock["insulin"],
+            "pump": self.stock["pump"]
+        })
     
     def _schedule_restock(self, item: str, current_time: float) -> float:
         """Schedule a new restock for an item if one is not already on the way."""
@@ -62,11 +72,13 @@ class ConsumableAcquisitionModel:
     
     def _refresh_stock_levels(self, current_time: float):
         """Apply completed restocks and honor queued backorders."""
+        stock_changed = False
         for item in self.stock:
             eta = self.restock_eta[item]
             if eta is not None and current_time >= eta:
                 self.stock[item] = self.max_stock[item]
                 self.restock_eta[item] = None
+                stock_changed = True
                 
                 # Serve backordered units in FIFO order
                 while self.backlog_units[item]:
@@ -79,12 +91,20 @@ class ConsumableAcquisitionModel:
                         remaining = units_needed - self.stock[item]
                         self.backlog_units[item][0] = remaining
                         self.stock[item] = 0
+                        # Trigger restocking because we are at 0, which is <= threshold
                         self._schedule_restock(item, current_time)
                         break
                 
-                # Immediately queue another shipment if we dipped below the safety threshold again
+                # Immediately queue another shipment if we are below the safety threshold
+                # This covers both the case where backlog consumed stock, or if we just refilled but
+                # had so much backlog we're already low again (though the loop handles the 0 case)
+                # But more importantly, if we served backlog and are now at e.g. 10 units (threshold 20),
+                # we need to reorder.
                 if self.stock[item] <= self.restock_threshold[item] and self.restock_eta[item] is None:
                     self._schedule_restock(item, current_time)
+        
+        if stock_changed:
+            self._log_stock(current_time)
     
     def simulate_pharmacy_visit(self, patient: Patient, current_time: float) -> Dict[str, float]:
         """Simulate the patient's pharmacy visit considering travel, queue, service, and stock."""
@@ -103,16 +123,27 @@ class ConsumableAcquisitionModel:
         
         for item in patient.get_pharmacy_needs():
             units_needed = self.ITEM_UNITS[item]
+            
+            # Allow consumption if physical stock is sufficient.
             if self.stock[item] >= units_needed:
                 self.stock[item] -= units_needed
                 items_now.append(item)
+                # Check if we crossed the reorder threshold (20%)
                 self._maybe_trigger_restock(item, current_time)
             else:
+                # Not enough physical stock
                 patient.return_pharmacy = True
+                items_after_restock.append(item)
+                
+                # Ensure restock is coming if we are out/low
+                if self.restock_eta[item] is None:
+                    self._schedule_restock(item, current_time)
+                
                 wait_time = self._ensure_restock(item, current_time)
                 restock_wait_minutes = max(restock_wait_minutes, wait_time)
-                items_after_restock.append(item)
                 self.backlog_units[item].append(units_needed)
+        
+        self._log_stock(current_time)
         
         if patient.return_pharmacy:
             return_travel_time = patient.pharmacy_distance_min
@@ -367,14 +398,13 @@ class ConsumableAcquisitionModel:
         fig1.savefig(plot_path1, dpi=300, bbox_inches="tight")
         print(f"Main dashboard saved to {plot_path1}")
         
-        # Figure 2: Gantt Chart Colored by Need with Arrow/Bar Style
-        fig2, ax5 = plt.subplots(figsize=(14, 10))
-        fig2.suptitle("Detailed Patient Pharmacy Timeline (Need & Stock Status)", fontsize=16, fontweight="bold")
+        # Figure 2: Gantt Chart Colored by Need with Arrow/Bar Style + Stock Levels
+        fig2, (ax5, ax6) = plt.subplots(2, 1, figsize=(14, 14), gridspec_kw={'height_ratios': [2, 1]})
+        fig2.suptitle("Detailed Patient Pharmacy Timeline & Stock Levels", fontsize=16, fontweight="bold")
         
+        # Subplot 1: Gantt Chart (Same as before)
         # Y axis = Patient ID
         # X axis = Time (Days)
-        # Color = Need (Insulin/Pump/Both)
-        # Shape = Bar (Stock In) or Arrow (Stock Out)
         
         for i in range(len(self.results)):
             pid = patient_indices[i]
@@ -387,21 +417,18 @@ class ConsumableAcquisitionModel:
                 # Normal bar for in-stock
                 ax5.barh(pid, duration, left=start, height=0.6, color=color, alpha=0.7)
             else:
-                # Arrow for out-of-stock (long wait)
-                # Since duration is long, drawing an arrow might look like a long bar with a head.
-                # We'll use arrow annotation or a bar with a specific style.
-                # User asked for "arrow shaped bar". matplotlib doesn't have a native "arrow bar".
-                # We can use FancyArrow or arrow.
-                # Let's draw a standard arrow.
+                # Arrow for out-of-stock
                 ax5.arrow(start, pid, duration, 0, 
                          head_width=0.4, head_length=0.1, fc=color, ec=color, 
                          length_includes_head=True, alpha=0.9)
         
-        ax5.set_xlabel("Time (Days)")
         ax5.set_ylabel("Patient ID")
         ax5.grid(axis='x', alpha=0.3)
+        # Use same X axis limits for both plots
+        max_day_plot = max(np.max(end_days), self.stock_history[-1]["time"]/(24*60)) if self.stock_history else np.max(end_days)
+        ax5.set_xlim(0, max_day_plot + 1)
         
-        # Create custom legend for this complex chart
+        # Legend for Gantt
         legend_elements = [
             Line2D([0], [0], color='skyblue', lw=4, label='Insulin'),
             Line2D([0], [0], color='orange', lw=4, label='Pump'),
@@ -410,6 +437,28 @@ class ConsumableAcquisitionModel:
             Line2D([0], [0], marker=r'$\rightarrow$', color='gray', markersize=15, label='Stock Out (Arrow)')
         ]
         ax5.legend(handles=legend_elements, loc='upper right')
+        
+        # Subplot 2: Stock Levels over Time
+        if hasattr(self, 'stock_history') and self.stock_history:
+            stock_times = [x["time"] / (24 * 60) for x in self.stock_history]
+            insulin_levels = [x["insulin"] for x in self.stock_history]
+            pump_levels = [x["pump"] for x in self.stock_history]
+            
+            # Step plot for inventory levels
+            ax6.step(stock_times, insulin_levels, where='post', label='Insulin Stock', color='skyblue', lw=2)
+            ax6.step(stock_times, pump_levels, where='post', label='Pump Stock', color='orange', lw=2)
+            
+            # Add threshold lines
+            ax6.axhline(y=self.restock_threshold["insulin"], color='skyblue', linestyle='--', alpha=0.5, label='Insulin Reorder Point')
+            ax6.axhline(y=self.restock_threshold["pump"], color='orange', linestyle='--', alpha=0.5, label='Pump Reorder Point')
+            
+            ax6.set_xlabel("Time (Days)")
+            ax6.set_ylabel("Units in Stock")
+            ax6.set_xlim(0, max_day_plot + 1)
+            ax6.legend()
+            ax6.grid(True, alpha=0.3)
+        else:
+            ax6.text(0.5, 0.5, "Stock history not available", ha='center')
         
         plot_path2 = os.path.join("result", f"timeline_plot_{timestamp}.png")
         fig2.savefig(plot_path2, dpi=300, bbox_inches="tight")
