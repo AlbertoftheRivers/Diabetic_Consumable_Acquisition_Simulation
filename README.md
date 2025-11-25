@@ -110,11 +110,11 @@ Results are saved as CSV files in the `result/` folder with format:
 Plots are saved as PNG files:
 - `simulation_plot_YYYYMMDD_HHMMSS.png`
 
-The plot dashboard now visualizes:
-1. **Return Status by Need Category:** A categorical scatter plot showing which patient types (Insulin/Pump/Both) were forced to return.
-2. **Total Acquisition Time:** Scatter plot of total time per patient, with red markers for those who hit stock-outs.
-3. **Pharmacy Time:** Scatter plot showing the specific impact of stock-outs on pharmacy visit duration.
-4. **1177 Platform Time:** Scatter plot of online order fulfillment times (unaffected by pharmacy stock).
+The plot dashboard now includes:
+1. **Total Pharmacy Time per Patient:** A bar chart where each patient is represented by a bar colored by their need (Insulin=Skyblue, Pump=Orange, Both=Green).
+2. **Total 1177 Time per Patient:** A bar chart showing the online platform time for each patient (all Blue).
+3. **Total Acquisition Time per Patient:** A bar chart of the overall max time, colored by need.
+4. **Pharmacy Stock Status Overview:** A scatter plot showing the total pharmacy time for patients over the chronological sequence. Patients who had to return due to stock-outs are marked with a red 'X', while those with stock are grey dots. Vertical lines indicate weekly boundaries.
 
 The console summary (and `run_simulation.py`) now also prints the average total time, pharmacy time, 1177 time, and the percentage of patients who needed to return to the pharmacy.
 

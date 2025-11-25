@@ -42,8 +42,8 @@ class ConsumableAcquisitionModel:
     
     def _schedule_restock(self, item: str, current_time: float) -> float:
         """Schedule a new restock for an item if one is not already on the way."""
-        delay_hours = random.uniform(12, 24)  # Pharmacies restock within roughly half to one day
-        eta = current_time + delay_hours * 60
+        delay_days = random.uniform(1, 3)  # Restock takes 1 to 3 days
+        eta = current_time + delay_days * 24 * 60
         if self.restock_eta[item] is None or eta < self.restock_eta[item]:
             self.restock_eta[item] = eta
         return self.restock_eta[item]
@@ -178,6 +178,7 @@ class ConsumableAcquisitionModel:
             "patient_name": patient.name,
             "arrival_day": pharmacy_timing["arrival_day"],
             "arrival_time": pharmacy_timing["arrival_time"],
+            "arrival_absolute_minutes": arrival_time,
             "wants_insulin": patient.wants_insulin,
             "wants_pump": patient.wants_pump,
             "return_pharmacy": patient.return_pharmacy,
@@ -246,7 +247,7 @@ class ConsumableAcquisitionModel:
         
         fieldnames = [
             "patient_id", "patient_name", "arrival_day", "arrival_time",
-            "wants_insulin", "wants_pump", "return_pharmacy",
+            "arrival_absolute_minutes", "wants_insulin", "wants_pump", "return_pharmacy",
             "pharmacy_travel_time", "pharmacy_queue_time", "pharmacy_service_time",
             "pharmacy_restock_wait_minutes", "pharmacy_return_travel_time",
             "pharmacy_return_queue_time", "pharmacy_return_service_time",
@@ -271,84 +272,149 @@ class ConsumableAcquisitionModel:
             raise ValueError("No simulation results to plot. Run simulation first.")
         
         # Prepare data frames
-        pharmacy_times = np.array([r["pharmacy_total_time_days"] for r in self.results])
-        platform_times = np.array([r["1177_total_time_days"] for r in self.results])
-        total_times = np.array([r["total_time_days"] for r in self.results])
+        pharmacy_times = np.array([r["pharmacy_total_time_minutes"] for r in self.results])
+        platform_times = np.array([r["1177_total_time_minutes"] for r in self.results])
+        total_times = np.array([r["total_time_minutes"] for r in self.results])
+        arrival_absolute = np.array([r.get("arrival_absolute_minutes", 0) for r in self.results])
         returns = np.array([r["return_pharmacy"] for r in self.results])
-        arrival_days = np.array([r["arrival_day"] for r in self.results])
         
-        # Categorize needs
-        needs_category = []
+        # Calculate start and end times for Gantt
+        start_days = arrival_absolute / (24 * 60)
+        durations_days = pharmacy_times / (24 * 60)
+        end_days = start_days + durations_days
+        
+        patient_indices = np.arange(len(self.results)) + 1
+        
+        # Categorize needs for coloring
+        colors = []
         for r in self.results:
             if r["wants_insulin"] and r["wants_pump"]:
-                needs_category.append("Both")
+                colors.append("green")
             elif r["wants_insulin"]:
-                needs_category.append("Insulin only")
+                colors.append("skyblue")
             else:
-                needs_category.append("Pump only")
-        needs_category = np.array(needs_category)
+                colors.append("orange")
         
-        fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-        fig.suptitle("Diabetic Patient Consumable Acquisition Simulation Results",
-                     fontsize=16, fontweight="bold")
+        # Figure 1: The 3 Bar Charts + Calendar/Gantt
+        fig1, axes = plt.subplots(2, 2, figsize=(18, 12))
+        fig1.suptitle("Diabetic Patient Consumable Acquisition Simulation Results", fontsize=16, fontweight="bold")
         
-        # Plot 1: Return Status by Need Category
-        categories = ["Insulin only", "Pump only", "Both"]
-        colors = {"Insulin only": "skyblue", "Pump only": "orange", "Both": "green"}
-        
+        # 1) Total Pharmacy Time per Patient (Bar chart, colored by need)
         ax1 = axes[0, 0]
-        ax1.set_title("Return Status by Patient Need")
-        ax1.set_yticks([0, 1])
-        ax1.set_yticklabels(["No Return", "Return Needed"])
-        ax1.set_xticks(range(len(categories)))
-        ax1.set_xticklabels(categories)
-        ax1.grid(axis="y", alpha=0.3)
+        ax1.bar(patient_indices, pharmacy_times, color=colors, alpha=0.7)
+        ax1.set_title("1) Total Pharmacy Time per Patient")
+        ax1.set_xlabel("Patient ID")
+        ax1.set_ylabel("Time (minutes)")
         
-        for i, cat in enumerate(categories):
-            mask = needs_category == cat
-            cat_returns = returns[mask]
-            # Jitter y-values
-            y_jitter = cat_returns + np.random.normal(0, 0.05, size=len(cat_returns))
-            y_jitter = np.clip(y_jitter, -0.2, 1.2)
-            # Jitter x-values
-            x_jitter = i + np.random.normal(0, 0.1, size=len(cat_returns))
-            ax1.scatter(x_jitter, y_jitter, label=cat, alpha=0.6, c=colors[cat])
-        ax1.legend()
+        from matplotlib.lines import Line2D
+        custom_lines = [Line2D([0], [0], color='skyblue', lw=4),
+                        Line2D([0], [0], color='orange', lw=4),
+                        Line2D([0], [0], color='green', lw=4)]
+        ax1.legend(custom_lines, ['Insulin', 'Pump', 'Both'])
+        ax1.grid(axis='y', alpha=0.3)
 
-        # Helper for time plots
-        def plot_time_scatter(ax, time_data, title, y_label):
-            mask_return = returns == True
-            mask_no_return = returns == False
-            
-            ax.scatter(np.arange(len(total_times))[mask_no_return], 
-                      time_data[mask_no_return], 
-                      c='blue', alpha=0.5, label='No Return')
-            
-            ax.scatter(np.arange(len(total_times))[mask_return], 
-                      time_data[mask_return], 
-                      c='red', marker='x', alpha=0.7, label='Return Needed')
-            
-            ax.set_title(title)
-            ax.set_ylabel(y_label)
-            ax.set_xlabel("Patient Index (Chronological Arrival)")
-            ax.grid(alpha=0.3)
-            ax.legend()
+        # 2) Total 1177 Time per Patient (Bar chart, all blue)
+        ax2 = axes[0, 1]
+        ax2.bar(patient_indices, platform_times, color='blue', alpha=0.6)
+        ax2.set_title("2) Total 1177 Time per Patient")
+        ax2.set_xlabel("Patient ID")
+        ax2.set_ylabel("Time (minutes)")
+        ax2.grid(axis='y', alpha=0.3)
 
-        # Plot 2: Total Time
-        plot_time_scatter(axes[0, 1], total_times, "Total Acquisition Time", "Time (days)")
+        # 3) Total Time per Patient (Bar chart, colored by need)
+        ax3 = axes[1, 0]
+        ax3.bar(patient_indices, total_times, color=colors, alpha=0.7)
+        ax3.set_title("3) Total Acquisition Time per Patient")
+        ax3.set_xlabel("Patient ID")
+        ax3.set_ylabel("Time (minutes)")
+        ax3.legend(custom_lines, ['Insulin', 'Pump', 'Both'])
+        ax3.grid(axis='y', alpha=0.3)
+
+        # 4) Daily Returns Histogram
+        ax4 = axes[1, 1]
         
-        # Plot 3: Pharmacy Time
-        plot_time_scatter(axes[1, 0], pharmacy_times, "Pharmacy Time", "Time (days)")
+        # We need to count returns per calendar day
+        # Each return happens on a specific day. We can use the arrival day or the day the return was triggered.
+        # We'll use the arrival_day string from results which maps to the absolute day index
         
-        # Plot 4: 1177 Time
-        plot_time_scatter(axes[1, 1], platform_times, "1177 Platform Time", "Time (days)")
+        # First, recover absolute day index from arrival_absolute
+        # We know day = floor(minutes / (24*60))
+        # But results also has arrival_day string (e.g. "Monday").
+        # Let's bin by absolute day number to keep the sequence correct (Week 1 Mon, Week 2 Mon...)
+        
+        day_indices = (arrival_absolute // (24 * 60)).astype(int)
+        max_day = int(day_indices.max())
+        
+        # Count returns per day
+        daily_returns = np.zeros(max_day + 1)
+        for i, r in enumerate(returns):
+            if r:
+                day_idx = day_indices[i]
+                daily_returns[day_idx] += 1
+        
+        # X axis: Day 0, 1, 2...
+        days = np.arange(max_day + 1)
+        ax4.bar(days, daily_returns, color='red', alpha=0.6)
+        ax4.set_title("4) Number of Returns to Pharmacy per Day")
+        ax4.set_xlabel("Day (Simulation Timeline)")
+        ax4.set_ylabel("Count of Returns")
+        ax4.grid(axis='y', alpha=0.3)
         
         plt.tight_layout()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        plot_path = os.path.join("result", f"simulation_plot_{timestamp}.png")
+        plot_path1 = os.path.join("result", f"simulation_plot_{timestamp}.png")
         os.makedirs("result", exist_ok=True)
-        plt.savefig(plot_path, dpi=300, bbox_inches="tight")
-        print(f"Plot saved to {plot_path}")
+        fig1.savefig(plot_path1, dpi=300, bbox_inches="tight")
+        print(f"Main dashboard saved to {plot_path1}")
+        
+        # Figure 2: Gantt Chart Colored by Need with Arrow/Bar Style
+        fig2, ax5 = plt.subplots(figsize=(14, 10))
+        fig2.suptitle("Detailed Patient Pharmacy Timeline (Need & Stock Status)", fontsize=16, fontweight="bold")
+        
+        # Y axis = Patient ID
+        # X axis = Time (Days)
+        # Color = Need (Insulin/Pump/Both)
+        # Shape = Bar (Stock In) or Arrow (Stock Out)
+        
+        for i in range(len(self.results)):
+            pid = patient_indices[i]
+            start = start_days[i]
+            duration = durations_days[i]
+            color = colors[i]
+            is_return = returns[i]
+            
+            if not is_return:
+                # Normal bar for in-stock
+                ax5.barh(pid, duration, left=start, height=0.6, color=color, alpha=0.7)
+            else:
+                # Arrow for out-of-stock (long wait)
+                # Since duration is long, drawing an arrow might look like a long bar with a head.
+                # We'll use arrow annotation or a bar with a specific style.
+                # User asked for "arrow shaped bar". matplotlib doesn't have a native "arrow bar".
+                # We can use FancyArrow or arrow.
+                # Let's draw a standard arrow.
+                ax5.arrow(start, pid, duration, 0, 
+                         head_width=0.4, head_length=0.1, fc=color, ec=color, 
+                         length_includes_head=True, alpha=0.9)
+        
+        ax5.set_xlabel("Time (Days)")
+        ax5.set_ylabel("Patient ID")
+        ax5.grid(axis='x', alpha=0.3)
+        
+        # Create custom legend for this complex chart
+        legend_elements = [
+            Line2D([0], [0], color='skyblue', lw=4, label='Insulin'),
+            Line2D([0], [0], color='orange', lw=4, label='Pump'),
+            Line2D([0], [0], color='green', lw=4, label='Both'),
+            Line2D([0], [0], marker='s', color='w', markerfacecolor='gray', markersize=10, label='In Stock (Bar)'),
+            Line2D([0], [0], marker=r'$\rightarrow$', color='gray', markersize=15, label='Stock Out (Arrow)')
+        ]
+        ax5.legend(handles=legend_elements, loc='upper right')
+        
+        plot_path2 = os.path.join("result", f"timeline_plot_{timestamp}.png")
+        fig2.savefig(plot_path2, dpi=300, bbox_inches="tight")
+        print(f"Timeline plot saved to {plot_path2}")
+        
         plt.show()
 
 
